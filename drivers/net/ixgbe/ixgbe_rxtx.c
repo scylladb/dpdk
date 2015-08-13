@@ -2085,9 +2085,17 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	struct ixgbe_tx_queue *txq;
 	struct ixgbe_hw     *hw;
 	uint16_t tx_rs_thresh, tx_free_thresh;
+	bool rs_deferring_allowed;
 
 	PMD_INIT_FUNC_TRACE();
 	hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	/*
+	 * According to 82599 and x540 specifications RS bit *must* be set on the
+	 * last descriptor of *every* packet. Therefore we will not allow the
+	 * tx_rs_thresh above 1 for all NICs newer than 82598.
+	 */
+	rs_deferring_allowed = (hw->mac.type <= ixgbe_mac_82598EB);
 
 	/*
 	 * Validate number of transmit descriptors.
@@ -2110,6 +2118,8 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	 * to transmit a packet is greater than the number of free TX
 	 * descriptors.
 	 * The following constraints must be satisfied:
+	 *  tx_rs_thresh must be less than 2 for NICs for which RS deferring is
+	 *  forbidden (all but 82598).
 	 *  tx_rs_thresh must be greater than 0.
 	 *  tx_rs_thresh must be less than the size of the ring minus 2.
 	 *  tx_rs_thresh must be less than or equal to tx_free_thresh.
@@ -2121,9 +2131,20 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	 * When set to zero use default values.
 	 */
 	tx_rs_thresh = (uint16_t)((tx_conf->tx_rs_thresh) ?
-			tx_conf->tx_rs_thresh : DEFAULT_TX_RS_THRESH);
+			tx_conf->tx_rs_thresh :
+			(rs_deferring_allowed ? DEFAULT_TX_RS_THRESH : 1));
 	tx_free_thresh = (uint16_t)((tx_conf->tx_free_thresh) ?
 			tx_conf->tx_free_thresh : DEFAULT_TX_FREE_THRESH);
+
+	if (!rs_deferring_allowed && tx_rs_thresh > 1) {
+		PMD_INIT_LOG(ERR, "tx_rs_thresh must be less than 2 since RS "
+				  "must be set for every packet for this HW. "
+				  "(tx_rs_thresh=%u port=%d queue=%d)",
+			     (unsigned int)tx_rs_thresh,
+			     (int)dev->data->port_id, (int)queue_idx);
+		return -(EINVAL);
+	}
+
 	if (tx_rs_thresh >= (nb_desc - 2)) {
 		PMD_INIT_LOG(ERR, "tx_rs_thresh must be less than the number "
 			     "of TX descriptors minus 2. (tx_rs_thresh=%u "
