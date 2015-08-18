@@ -2472,7 +2472,15 @@ ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 			.wthresh = IXGBE_DEFAULT_TX_WTHRESH,
 		},
 		.tx_free_thresh = IXGBE_DEFAULT_TX_FREE_THRESH,
-		.tx_rs_thresh = IXGBE_DEFAULT_TX_RSBIT_THRESH,
+		/*
+		 * According to 82599 and x540 specifications RS bit *must* be
+		 * set on the last descriptor of *every* packet. Therefore we
+		 * will not allow the tx_rs_thresh above 1 for all NICs newer
+		 * than 82598. Since VFs are available only on devices starting
+		 * from 82599, tx_rs_thresh should be set to 1 for ALL VF
+		 * devices.
+		 */
+		.tx_rs_thresh = 1,
 		.txq_flags = ETH_TXQ_FLAGS_NOMULTSEGS |
 				ETH_TXQ_FLAGS_NOOFFLOADS,
 	};
