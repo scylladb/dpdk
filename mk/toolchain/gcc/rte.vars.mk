@@ -86,8 +86,10 @@ WERROR_FLAGS += -Wno-missing-field-initializers
 endif
 # workaround GCC bug with warning "may be used uninitialized"
 ifeq ($(shell test $(GCC_VERSION) -lt 47 && echo 1), 1)
-WERROR_FLAGS += -Wno-uninitialized
+WERROR_FLAGS += - Wno-uninitialized
 endif
+# workaround to skipping GCC6 additional errors
+WERROR_FLAGS += -Wno-misleading-indentation -Wno-shift-negative-value -Wno-maybe-uninitialized
 
 export CC AS AR LD OBJCOPY OBJDUMP STRIP READELF
 export TOOLCHAIN_CFLAGS TOOLCHAIN_LDFLAGS TOOLCHAIN_ASFLAGS
