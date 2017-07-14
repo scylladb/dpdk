@@ -111,7 +111,7 @@ doc-%:
 
 .PHONY: depdirs depgraph
 depdirs depgraph:
-	$(Q)$(MAKE) -f $(RTE_SDK)/mk/rte.sdkdepdirs.mk $@
+	$(Q)$(MAKE) -f $(RTE_SDK)/mk/rte.sdkdepdirs.mk ROOTDIRS-y="$(ROOTDIRS-y)" $@
 
 .PHONY: gcov gcovclean
 gcov gcovclean:
