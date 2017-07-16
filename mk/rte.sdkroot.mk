@@ -126,4 +126,4 @@ examples examples_clean:
 # all other build targets
 %:
 	$(Q)$(MAKE) -f $(RTE_SDK)/mk/rte.sdkconfig.mk checkconfig
-	$(Q)$(MAKE) -f $(RTE_SDK)/mk/rte.sdkbuild.mk $@
+	$(Q)$(MAKE) -f $(RTE_SDK)/mk/rte.sdkbuild.mk ROOTDIRS-y="$(ROOTDIRS-y)" $@
