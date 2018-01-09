@@ -49,7 +49,7 @@
 /* 64-bit mode */
 static inline uint64_t rte_arch_bswap64(uint64_t _x)
 {
-	register uint64_t x = _x;
+	uint64_t x = _x;
 	asm volatile ("bswap %[x]"
 		      : [x] "+r" (x)
 		      );
