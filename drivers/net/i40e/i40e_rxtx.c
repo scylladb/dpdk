@@ -2982,7 +2982,7 @@ i40e_rx_queue_init(struct i40e_rx_queue *rxq)
 		rx_ctx.hsplit_0 = I40E_HEADER_SPLIT_ALL;
 	else
 		rx_ctx.hsplit_0 = I40E_HEADER_SPLIT_NONE;
-	rx_ctx.rxmax = rxq->max_pkt_len;
+	rx_ctx.rxmax = rxq->max_pkt_len + I40E_VLAN_TAG_SIZE;
 	rx_ctx.tphrdesc_ena = 1;
 	rx_ctx.tphwdesc_ena = 1;
 	rx_ctx.tphdata_ena = 1;
