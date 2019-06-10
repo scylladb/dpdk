@@ -3782,6 +3782,14 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		.offloads = 0,
 	};
 
+	/*
+	 * According to 82599 and x540 specifications RS bit *must* be set on the
+	 * last descriptor of *every* packet. Therefore we will not allow the
+	 * tx_rs_thresh above 1 for all NICs newer than 82598.
+	 */
+	if (hw->mac.type > ixgbe_mac_82598EB)
+		dev_info->default_txconf.tx_rs_thresh = 1;
+
 	dev_info->rx_desc_lim = rx_desc_lim;
 	dev_info->tx_desc_lim = tx_desc_lim;
 
