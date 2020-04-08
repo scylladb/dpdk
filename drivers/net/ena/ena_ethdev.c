@@ -62,14 +62,6 @@
 /*reverse version of ENA_IO_RXQ_IDX*/
 #define ENA_IO_RXQ_IDX_REV(q)	((q - 1) / 2)
 
-/* While processing submitted and completed descriptors (rx and tx path
- * respectively) in a loop it is desired to:
- *  - perform batch submissions while populating sumbissmion queue
- *  - avoid blocking transmission of other packets during cleanup phase
- * Hence the utilization ratio of 1/8 of a queue size.
- */
-#define ENA_RING_DESCS_RATIO(ring_size)	(ring_size / 8)
-
 #define __MERGE_64B_H_L(h, l) (((uint64_t)h << 32) | l)
 #define TEST_BIT(val, bit_shift) (val & (1UL << bit_shift))
 
@@ -2015,6 +2007,8 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	struct ena_ring *rx_ring = (struct ena_ring *)(rx_queue);
 	unsigned int ring_size = rx_ring->ring_size;
 	unsigned int ring_mask = ring_size - 1;
+	unsigned int free_queue_entries;
+	unsigned int refill_threshold;
 	uint16_t next_to_clean = rx_ring->next_to_clean;
 	uint16_t desc_in_use = 0;
 	uint16_t req_id;
@@ -2116,11 +2110,15 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	rx_ring->rx_stats.cnt += recv_idx;
 	rx_ring->next_to_clean = next_to_clean;
 
-	desc_in_use = desc_in_use - completed + 1;
+	free_queue_entries = ena_com_free_desc(rx_ring->ena_com_io_sq);
+	refill_threshold =
+		RTE_MIN(ring_size / ENA_REFILL_THRESH_DIVIDER,
+		(unsigned int)ENA_REFILL_THRESH_PACKET);
+
 	/* Burst refill to save doorbells, memory barriers, const interval */
-	if (ring_size - desc_in_use > ENA_RING_DESCS_RATIO(ring_size)) {
+	if (free_queue_entries > refill_threshold) {
 		ena_com_update_dev_comp_head(rx_ring->ena_com_io_cq);
-		ena_populate_rx_queue(rx_ring, ring_size - desc_in_use);
+		ena_populate_rx_queue(rx_ring, free_queue_entries);
 	}
 
 	return recv_idx;
@@ -2259,6 +2257,7 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	uint16_t seg_len;
 	unsigned int ring_size = tx_ring->ring_size;
 	unsigned int ring_mask = ring_size - 1;
+	unsigned int cleanup_budget;
 	struct ena_com_tx_ctx ena_tx_ctx;
 	struct ena_tx_buffer *tx_info;
 	struct ena_com_buf *ebuf;
@@ -2416,9 +2415,12 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* Put back descriptor to the ring for reuse */
 		tx_ring->empty_tx_reqs[next_to_clean & ring_mask] = req_id;
 		next_to_clean++;
+		cleanup_budget =
+			RTE_MIN(ring_size / ENA_REFILL_THRESH_DIVIDER,
+			(unsigned int)ENA_REFILL_THRESH_PACKET);
 
 		/* If too many descs to clean, leave it for another run */
-		if (unlikely(total_tx_descs > ENA_RING_DESCS_RATIO(ring_size)))
+		if (unlikely(total_tx_descs > cleanup_budget))
 			break;
 	}
 	tx_ring->tx_stats.available_desc =
