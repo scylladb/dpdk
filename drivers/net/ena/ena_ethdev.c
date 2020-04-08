@@ -1454,12 +1454,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 
 	/* When we submitted free recources to device... */
 	if (likely(i > 0)) {
-		/* ...let HW know that it can fill buffers with data
-		 *
-		 * Add memory barrier to make sure the desc were written before
-		 * issue a doorbell
-		 */
-		rte_wmb();
+		/* ...let HW know that it can fill buffers with data. */
 		ena_com_write_sq_doorbell(rxq->ena_com_io_sq);
 
 		rxq->next_to_use = next_to_use;
@@ -2376,7 +2371,6 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			RTE_LOG(DEBUG, PMD, "llq tx max burst size of queue %d"
 				" achieved, writing doorbell to send burst\n",
 				tx_ring->id);
-			rte_wmb();
 			ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
 		}
 
@@ -2399,7 +2393,6 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	/* If there are ready packets to be xmitted... */
 	if (sent_idx > 0) {
 		/* ...let HW do its best :-) */
-		rte_wmb();
 		ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
 		tx_ring->tx_stats.doorbells++;
 		tx_ring->next_to_use = next_to_use;
