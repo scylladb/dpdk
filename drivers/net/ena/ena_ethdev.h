@@ -1,7 +1,7 @@
 /*-
 * BSD LICENSE
 *
-* Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+* Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,7 @@
 #define ENA_MIN_FRAME_LEN	64
 #define ENA_NAME_MAX_LEN	20
 #define ENA_PKT_MAX_BUFS	17
+#define ENA_RX_BUF_MIN_SIZE	1400
 
 #define ENA_MIN_MTU		128
 

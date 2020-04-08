@@ -1,7 +1,7 @@
 /*-
 * BSD LICENSE
 *
-* Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+* Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -1307,6 +1307,7 @@ static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 	struct ena_adapter *adapter =
 		(struct ena_adapter *)(dev->data->dev_private);
 	struct ena_ring *rxq = NULL;
+	size_t buffer_size;
 	int i;
 
 	rxq = &adapter->rx_ring[queue_idx];
@@ -1331,6 +1332,15 @@ static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 		RTE_LOG(ERR, PMD,
 			"Unsupported size of RX queue (max size: %d)\n",
 			adapter->rx_ring_size);
+		return -EINVAL;
+	}
+
+	/* ENA isn't supporting buffers smaller than 1400 bytes */
+	buffer_size = rte_pktmbuf_data_room_size(mp) - RTE_PKTMBUF_HEADROOM;
+	if (buffer_size < ENA_RX_BUF_MIN_SIZE) {
+		PMD_DRV_LOG(ERR,
+			"Unsupported size of RX buffer: %zu (min size: %d)\n",
+			buffer_size, ENA_RX_BUF_MIN_SIZE);
 		return -EINVAL;
 	}
 
