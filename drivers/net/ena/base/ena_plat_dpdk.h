@@ -1,7 +1,7 @@
 /*-
 * BSD LICENSE
 *
-* Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+* Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -204,7 +204,7 @@ do {                                                                   \
  * Each rte_memzone should have unique name.
  * To satisfy it, count number of allocations and add it to name.
  */
-extern uint32_t ena_alloc_cnt;
+extern rte_atomic32_t ena_alloc_cnt;
 
 #define ENA_MEM_ALLOC_COHERENT(dmadev, size, virt, phys, handle)	\
 	do {								\
@@ -212,7 +212,8 @@ extern uint32_t ena_alloc_cnt;
 		char z_name[RTE_MEMZONE_NAMESIZE];			\
 		ENA_TOUCH(dmadev); ENA_TOUCH(handle);			\
 		snprintf(z_name, sizeof(z_name),			\
-				"ena_alloc_%d", ena_alloc_cnt++);	\
+			 "ena_alloc_%d",				\
+			 rte_atomic32_add_return(&ena_alloc_cnt, 1));	\
 		mz = rte_memzone_reserve(z_name, size, SOCKET_ID_ANY,	\
 				RTE_MEMZONE_IOVA_CONTIG);		\
 		handle = mz;						\
@@ -237,7 +238,8 @@ extern uint32_t ena_alloc_cnt;
 		char z_name[RTE_MEMZONE_NAMESIZE];			\
 		ENA_TOUCH(dmadev); ENA_TOUCH(dev_node);			\
 		snprintf(z_name, sizeof(z_name),			\
-				"ena_alloc_%d", ena_alloc_cnt++);	\
+			 "ena_alloc_%d",				\
+			 rte_atomic32_add_return(&ena_alloc_cnt, 1));	\
 		mz = rte_memzone_reserve(z_name, size, node,		\
 				RTE_MEMZONE_IOVA_CONTIG);		\
 		mem_handle = mz;					\
