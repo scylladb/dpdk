@@ -29,7 +29,6 @@
 
 /* EAL defines */
 #define RTE_MAX_HEAPS 32
-#define RTE_MAX_MEMSEG_LISTS 128
 #define RTE_MAX_MEMSEG_PER_LIST 8192
 #define RTE_MAX_MEM_MB_PER_LIST 32768
 #define RTE_MAX_MEMSEG_PER_TYPE 32768
@@ -50,7 +49,6 @@
 
 /* mbuf defines */
 #define RTE_MBUF_DEFAULT_MEMPOOL_OPS "ring_mp_mc"
-#define RTE_MBUF_REFCNT_ATOMIC 1
 #define RTE_PKTMBUF_HEADROOM 128
 
 /* ether defines */
