@@ -317,6 +317,7 @@ if get_option('mbuf_refcnt_atomic')
     dpdk_conf.set('RTE_MBUF_REFCNT_ATOMIC', true)
 endif
 dpdk_conf.set10('RTE_IOVA_IN_MBUF', get_option('enable_iova_as_pa'))
+dpdk_conf.set('RTE_MAX_MEMSEG_LISTS', get_option('max_memseg_lists'))
 
 compile_time_cpuflags = []
 subdir(arch_subdir)
