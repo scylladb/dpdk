@@ -1,5 +1,7 @@
 # Please keep these options sorted alphabetically.
 
+option('apps', type: 'boolean', value: true, description:
+       'build apps')
 option('check_includes', type: 'boolean', value: false, description:
        'build "chkincs" to verify each header file can compile alone')
 option('cpu_instruction_set', type: 'string', value: 'auto',

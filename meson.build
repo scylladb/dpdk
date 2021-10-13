@@ -65,7 +65,9 @@ subdir('drivers')
 
 # build binaries and installable tools
 subdir('usertools')
-subdir('app')
+if get_option('apps')
+    subdir('app')
+endif
 
 # build docs
 subdir('doc')
