@@ -1,7 +1,7 @@
 /*-
 * BSD LICENSE
 *
-* Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+* Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -40,7 +40,6 @@
 #include <rte_dev.h>
 #include <rte_errno.h>
 #include <rte_version.h>
-#include <rte_eal_memconfig.h>
 #include <rte_net.h>
 
 #include "ena_ethdev.h"
@@ -62,14 +61,6 @@
 #define ENA_IO_RXQ_IDX(q)	(2 * (q) + 1)
 /*reverse version of ENA_IO_RXQ_IDX*/
 #define ENA_IO_RXQ_IDX_REV(q)	((q - 1) / 2)
-
-/* While processing submitted and completed descriptors (rx and tx path
- * respectively) in a loop it is desired to:
- *  - perform batch submissions while populating sumbissmion queue
- *  - avoid blocking transmission of other packets during cleanup phase
- * Hence the utilization ratio of 1/8 of a queue size.
- */
-#define ENA_RING_DESCS_RATIO(ring_size)	(ring_size / 8)
 
 #define __MERGE_64B_H_L(h, l) (((uint64_t)h << 32) | l)
 #define TEST_BIT(val, bit_shift) (val & (1UL << bit_shift))
@@ -118,7 +109,7 @@ struct ena_stats {
  * Each rte_memzone should have unique name.
  * To satisfy it, count number of allocation and add it to name.
  */
-uint32_t ena_alloc_cnt;
+rte_atomic32_t ena_alloc_cnt;
 
 static const struct ena_stats ena_stats_global_strings[] = {
 	ENA_STAT_GLOBAL_ENTRY(wd_expired),
@@ -272,22 +263,6 @@ static const struct eth_dev_ops ena_dev_ops = {
 	.reta_query           = ena_rss_reta_query,
 };
 
-#define NUMA_NO_NODE	SOCKET_ID_ANY
-
-static inline int ena_cpu_to_node(int cpu)
-{
-	struct rte_config *config = rte_eal_get_configuration();
-	struct rte_fbarray *arr = &config->mem_config->memzones;
-	const struct rte_memzone *mz;
-
-	if (unlikely(cpu >= RTE_MAX_MEMZONE))
-		return NUMA_NO_NODE;
-
-	mz = rte_fbarray_get(arr, cpu);
-
-	return mz->socket_id;
-}
-
 static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 				       struct ena_com_rx_ctx *ena_rx_ctx)
 {
@@ -304,8 +279,14 @@ static inline void ena_rx_mbuf_prepare(struct rte_mbuf *mbuf,
 	else if (ena_rx_ctx->l3_proto == ENA_ETH_IO_L3_PROTO_IPV6)
 		packet_type |= RTE_PTYPE_L3_IPV6;
 
-	if (unlikely(ena_rx_ctx->l4_csum_err))
-		ol_flags |= PKT_RX_L4_CKSUM_BAD;
+	if (!ena_rx_ctx->l4_csum_checked)
+		ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
+	else
+		if (unlikely(ena_rx_ctx->l4_csum_err) && !ena_rx_ctx->frag)
+			ol_flags |= PKT_RX_L4_CKSUM_BAD;
+		else
+			ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
+
 	if (unlikely(ena_rx_ctx->l3_csum_err))
 		ol_flags |= PKT_RX_IP_CKSUM_BAD;
 
@@ -347,12 +328,13 @@ static inline void ena_tx_mbuf_prepare(struct rte_mbuf *mbuf,
 		}
 
 		/* check if L4 checksum is needed */
-		if ((mbuf->ol_flags & PKT_TX_TCP_CKSUM) &&
+		if (((mbuf->ol_flags & PKT_TX_L4_MASK) == PKT_TX_TCP_CKSUM) &&
 		    (queue_offloads & DEV_TX_OFFLOAD_TCP_CKSUM)) {
 			ena_tx_ctx->l4_proto = ENA_ETH_IO_L4_PROTO_TCP;
 			ena_tx_ctx->l4_csum_enable = true;
-		} else if ((mbuf->ol_flags & PKT_TX_UDP_CKSUM) &&
-			   (queue_offloads & DEV_TX_OFFLOAD_UDP_CKSUM)) {
+		} else if (((mbuf->ol_flags & PKT_TX_L4_MASK) ==
+				PKT_TX_UDP_CKSUM) &&
+				(queue_offloads & DEV_TX_OFFLOAD_UDP_CKSUM)) {
 			ena_tx_ctx->l4_proto = ENA_ETH_IO_L4_PROTO_UDP;
 			ena_tx_ctx->l4_csum_enable = true;
 		} else {
@@ -1114,19 +1096,18 @@ static int ena_create_io_queue(struct ena_ring *ring)
 		ena_qid = ENA_IO_TXQ_IDX(ring->id);
 		ctx.direction = ENA_COM_IO_QUEUE_DIRECTION_TX;
 		ctx.mem_queue_type = ena_dev->tx_mem_queue_type;
-		ctx.queue_size = adapter->tx_ring_size;
 		for (i = 0; i < ring->ring_size; i++)
 			ring->empty_tx_reqs[i] = i;
 	} else {
 		ena_qid = ENA_IO_RXQ_IDX(ring->id);
 		ctx.direction = ENA_COM_IO_QUEUE_DIRECTION_RX;
-		ctx.queue_size = adapter->rx_ring_size;
 		for (i = 0; i < ring->ring_size; i++)
 			ring->empty_rx_reqs[i] = i;
 	}
+	ctx.queue_size = ring->ring_size;
 	ctx.qid = ena_qid;
 	ctx.msix_vector = -1; /* interrupts not used */
-	ctx.numa_node = ena_cpu_to_node(ring->id);
+	ctx.numa_node = ring->numa_socket_id;
 
 	rc = ena_com_create_io_queue(ena_dev, &ctx);
 	if (rc) {
@@ -1224,7 +1205,7 @@ static int ena_queue_start(struct ena_ring *ring)
 static int ena_tx_queue_setup(struct rte_eth_dev *dev,
 			      uint16_t queue_idx,
 			      uint16_t nb_desc,
-			      __rte_unused unsigned int socket_id,
+			      unsigned int socket_id,
 			      const struct rte_eth_txconf *tx_conf)
 {
 	struct ena_ring *txq = NULL;
@@ -1262,6 +1243,7 @@ static int ena_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->next_to_clean = 0;
 	txq->next_to_use = 0;
 	txq->ring_size = nb_desc;
+	txq->numa_socket_id = socket_id;
 
 	txq->tx_buffer_info = rte_zmalloc("txq->tx_buffer_info",
 					  sizeof(struct ena_tx_buffer) *
@@ -1309,13 +1291,14 @@ static int ena_tx_queue_setup(struct rte_eth_dev *dev,
 static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 			      uint16_t queue_idx,
 			      uint16_t nb_desc,
-			      __rte_unused unsigned int socket_id,
+			      unsigned int socket_id,
 			      __rte_unused const struct rte_eth_rxconf *rx_conf,
 			      struct rte_mempool *mp)
 {
 	struct ena_adapter *adapter =
 		(struct ena_adapter *)(dev->data->dev_private);
 	struct ena_ring *rxq = NULL;
+	size_t buffer_size;
 	int i;
 
 	rxq = &adapter->rx_ring[queue_idx];
@@ -1343,10 +1326,20 @@ static int ena_rx_queue_setup(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
+	/* ENA isn't supporting buffers smaller than 1400 bytes */
+	buffer_size = rte_pktmbuf_data_room_size(mp) - RTE_PKTMBUF_HEADROOM;
+	if (buffer_size < ENA_RX_BUF_MIN_SIZE) {
+		PMD_DRV_LOG(ERR,
+			"Unsupported size of RX buffer: %zu (min size: %d)\n",
+			buffer_size, ENA_RX_BUF_MIN_SIZE);
+		return -EINVAL;
+	}
+
 	rxq->port_id = dev->data->port_id;
 	rxq->next_to_clean = 0;
 	rxq->next_to_use = 0;
 	rxq->ring_size = nb_desc;
+	rxq->numa_socket_id = socket_id;
 	rxq->mb_pool = mp;
 
 	rxq->rx_buffer_info = rte_zmalloc("rxq->buffer_info",
@@ -1453,12 +1446,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 
 	/* When we submitted free recources to device... */
 	if (likely(i > 0)) {
-		/* ...let HW know that it can fill buffers with data
-		 *
-		 * Add memory barrier to make sure the desc were written before
-		 * issue a doorbell
-		 */
-		rte_wmb();
+		/* ...let HW know that it can fill buffers with data. */
 		ena_com_write_sq_doorbell(rxq->ena_com_io_sq);
 
 		rxq->next_to_use = next_to_use;
@@ -1712,7 +1700,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	int rc;
 
 	static int adapters_found;
-	bool wd_state;
+	bool wd_state = false;
 
 	eth_dev->dev_ops = &ena_dev_ops;
 	eth_dev->rx_pkt_burst = &eth_ena_recv_pkts;
@@ -2019,6 +2007,8 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	struct ena_ring *rx_ring = (struct ena_ring *)(rx_queue);
 	unsigned int ring_size = rx_ring->ring_size;
 	unsigned int ring_mask = ring_size - 1;
+	unsigned int free_queue_entries;
+	unsigned int refill_threshold;
 	uint16_t next_to_clean = rx_ring->next_to_clean;
 	uint16_t desc_in_use = 0;
 	uint16_t req_id;
@@ -2104,8 +2094,10 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		ena_rx_mbuf_prepare(mbuf_head, &ena_rx_ctx);
 
 		if (unlikely(mbuf_head->ol_flags &
-			(PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)))
+				(PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD))) {
+			rte_atomic64_inc(&rx_ring->adapter->drv_stats->ierrors);
 			++rx_ring->rx_stats.bad_csum;
+		}
 
 		mbuf_head->hash.rss = ena_rx_ctx.hash;
 
@@ -2118,11 +2110,15 @@ static uint16_t eth_ena_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	rx_ring->rx_stats.cnt += recv_idx;
 	rx_ring->next_to_clean = next_to_clean;
 
-	desc_in_use = desc_in_use - completed + 1;
+	free_queue_entries = ena_com_free_desc(rx_ring->ena_com_io_sq);
+	refill_threshold =
+		RTE_MIN(ring_size / ENA_REFILL_THRESH_DIVIDER,
+		(unsigned int)ENA_REFILL_THRESH_PACKET);
+
 	/* Burst refill to save doorbells, memory barriers, const interval */
-	if (ring_size - desc_in_use > ENA_RING_DESCS_RATIO(ring_size)) {
+	if (free_queue_entries > refill_threshold) {
 		ena_com_update_dev_comp_head(rx_ring->ena_com_io_cq);
-		ena_populate_rx_queue(rx_ring, ring_size - desc_in_use);
+		ena_populate_rx_queue(rx_ring, free_queue_entries);
 	}
 
 	return recv_idx;
@@ -2261,6 +2257,7 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	uint16_t seg_len;
 	unsigned int ring_size = tx_ring->ring_size;
 	unsigned int ring_mask = ring_size - 1;
+	unsigned int cleanup_budget;
 	struct ena_com_tx_ctx ena_tx_ctx;
 	struct ena_tx_buffer *tx_info;
 	struct ena_com_buf *ebuf;
@@ -2333,10 +2330,6 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* Set TX offloads flags, if applicable */
 		ena_tx_mbuf_prepare(mbuf, &ena_tx_ctx, tx_ring->offloads);
 
-		if (unlikely(mbuf->ol_flags &
-			     (PKT_RX_L4_CKSUM_BAD | PKT_RX_IP_CKSUM_BAD)))
-			rte_atomic64_inc(&tx_ring->adapter->drv_stats->ierrors);
-
 		rte_prefetch0(tx_pkts[(sent_idx + 4) & ring_mask]);
 
 		/* Process first segment taking into
@@ -2377,7 +2370,6 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			RTE_LOG(DEBUG, PMD, "llq tx max burst size of queue %d"
 				" achieved, writing doorbell to send burst\n",
 				tx_ring->id);
-			rte_wmb();
 			ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
 		}
 
@@ -2391,7 +2383,7 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		tx_info->tx_descs = nb_hw_desc;
 
 		next_to_use++;
-		tx_ring->tx_stats.cnt += tx_info->num_of_bufs;
+		tx_ring->tx_stats.cnt++;
 		tx_ring->tx_stats.bytes += total_length;
 	}
 	tx_ring->tx_stats.available_desc =
@@ -2400,7 +2392,6 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	/* If there are ready packets to be xmitted... */
 	if (sent_idx > 0) {
 		/* ...let HW do its best :-) */
-		rte_wmb();
 		ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
 		tx_ring->tx_stats.doorbells++;
 		tx_ring->next_to_use = next_to_use;
@@ -2424,9 +2415,12 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* Put back descriptor to the ring for reuse */
 		tx_ring->empty_tx_reqs[next_to_clean & ring_mask] = req_id;
 		next_to_clean++;
+		cleanup_budget =
+			RTE_MIN(ring_size / ENA_REFILL_THRESH_DIVIDER,
+			(unsigned int)ENA_REFILL_THRESH_PACKET);
 
 		/* If too many descs to clean, leave it for another run */
-		if (unlikely(total_tx_descs > ENA_RING_DESCS_RATIO(ring_size)))
+		if (unlikely(total_tx_descs > cleanup_budget))
 			break;
 	}
 	tx_ring->tx_stats.available_desc =

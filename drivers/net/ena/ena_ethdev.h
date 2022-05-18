@@ -1,7 +1,7 @@
 /*-
 * BSD LICENSE
 *
-* Copyright (c) 2015-2016 Amazon.com, Inc. or its affiliates.
+* Copyright (c) 2015-2020 Amazon.com, Inc. or its affiliates.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,7 @@
 #define ENA_MIN_FRAME_LEN	64
 #define ENA_NAME_MAX_LEN	20
 #define ENA_PKT_MAX_BUFS	17
+#define ENA_RX_BUF_MIN_SIZE	1400
 
 #define ENA_MIN_MTU		128
 
@@ -55,6 +56,16 @@
 
 #define ENA_WD_TIMEOUT_SEC	3
 #define ENA_DEVICE_KALIVE_TIMEOUT (ENA_WD_TIMEOUT_SEC * rte_get_timer_hz())
+
+/* While processing submitted and completed descriptors (rx and tx path
+ * respectively) in a loop it is desired to:
+ *  - perform batch submissions while populating sumbissmion queue
+ *  - avoid blocking transmission of other packets during cleanup phase
+ * Hence the utilization ratio of 1/8 of a queue size or max value if the size
+ * of the ring is very big - like 8k Rx rings.
+ */
+#define ENA_REFILL_THRESH_DIVIDER      8
+#define ENA_REFILL_THRESH_PACKET       256
 
 struct ena_adapter;
 
@@ -143,6 +154,8 @@ struct ena_ring {
 		struct ena_stats_rx rx_stats;
 		struct ena_stats_tx tx_stats;
 	};
+
+	unsigned int numa_socket_id;
 } __rte_cache_aligned;
 
 enum ena_adapter_state {
